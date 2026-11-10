@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>ESP Game Thing</title>
+<style>
+:root{--bg:#0b3d2e;--ink:#eafff4;--dim:#9fd3bb;--gold:#f2c14e;--panel:#10241d}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);overflow:hidden;
+  font:15px/1.45 ui-rounded,"SF Pro Rounded","Trebuchet MS",system-ui,sans-serif;
+  -webkit-user-select:none;user-select:none}
+#c{position:fixed;inset:0;width:100%;height:100%;touch-action:none;display:block}
+#sheet{position:fixed;left:0;right:0;bottom:0;max-height:78%;overflow:auto;background:var(--panel);
+  border-top:3px solid var(--gold);border-radius:18px 18px 0 0;padding:14px 16px 22px;
+  transform:translateY(105%);transition:transform .25s ease;box-shadow:0 -8px 30px #0008}
+#sheet.on{transform:none}
+#sheet>div{max-width:460px;margin:0 auto}
+h2{margin:0 0 6px;font-size:20px}
+p{margin:8px 0;color:#d5efe3}
+.x{float:right;background:#1d3b31;color:var(--ink);border:0;border-radius:99px;width:34px;height:34px;font-size:18px}
+.big{font-size:54px;font-weight:800;text-align:center;line-height:1.1;margin:6px 0}
+.bonus{background:#17352b;border:1px dashed var(--gold);border-radius:12px;padding:9px 11px;margin-top:10px}
+.bonus.done{border-style:solid;background:#3a3312}
+.viz{background:#081a14;border-radius:12px;padding:10px;margin:10px 0}
+button.go{background:var(--gold);color:#2a1e00;border:0;border-radius:12px;padding:11px 16px;font:inherit;font-weight:800;width:100%}
+.btnviz{width:104px;height:104px;border-radius:50%;margin:4px auto;background:#444;border:8px solid #222;
+  display:flex;align-items:center;justify-content:center;font-weight:800;color:#bbb;transition:.06s}
+.btnviz.on{background:#ffd166;color:#3a2a00;transform:scale(.9);box-shadow:0 0 30px #ffd166}
+.bars{display:flex;gap:8px;height:130px;align-items:flex-end}
+.bars>div{flex:1;text-align:center;font-size:11px;color:var(--dim)}
+.bars i{display:block;height:92px;background:#0f2b22;border-radius:6px;position:relative;overflow:hidden;margin-bottom:3px}
+.bars i b{position:absolute;left:0;right:0;bottom:0;background:#7ae582;height:0;transition:height .2s}
+.sw{display:flex;gap:9px;flex-wrap:wrap;justify-content:center}
+.sw button{width:46px;height:46px;border-radius:50%;border:3px solid #fff3}
+.lamp{width:70px;height:70px;border-radius:50%;margin:0 auto 12px;background:#222;border:3px solid #fff2;transition:.2s}
+.net{display:flex;align-items:center;gap:8px;padding:8px 6px;border-bottom:1px solid #ffffff14}
+.net span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.net small{color:var(--dim)}
+.net.no{opacity:.35}.net.yes{background:#3a3312;border-radius:8px}
+.sig{display:inline-flex;gap:2px;align-items:flex-end;height:16px}
+.sig i{width:4px;background:#ffffff26;border-radius:1px}.sig i.on{background:#59c3ff}
+code{background:#081a14;padding:1px 5px;border-radius:5px;color:var(--gold)}
+ul{margin:6px 0;padding-left:20px}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="sheet"><div id="sh"></div></div>
+<script>
+(()=>{
+const W=360,H=600,cv=document.getElementById('c'),g=cv.getContext('2d');
+const sheet=document.getElementById('sheet'),sh=document.getElementById('sh');
+const $=id=>document.getElementById(id);
+const FONT='ui-rounded,"SF Pro Rounded","Trebuchet MS",system-ui,sans-serif';
+
+// ---------- the world ----------
+const ST={
+  temp:{name:'Thermometer',icon:'🌡️',pin:'TEMP',col:'#ff7a59',x:62,y:128,clue:'Find the pin that feels heat.'},
+  ant:{name:'Antenna',icon:'📡',pin:'ANT',col:'#59c3ff',x:298,y:128,clue:'Find the pin that reaches the airwaves.'},
+  btn:{name:'Button',icon:'🔘',pin:'IO28',col:'#ffd166',x:44,y:300,clue:'Find the pin the BOOT button sits on.'},
+  led:{name:'Light',icon:'💡',pin:'IO27',col:'#c77dff',x:316,y:300,clue:'Find the pin that drives the light.'},
+  probe:{name:'Touch probe',icon:'✋',pin:'IO1-6',col:'#7ae582',x:62,y:472,clue:'Find the pins that measure voltage.'},
+  i2c:{name:'Robot bus',icon:'🦿',pin:'I2C',col:'#ff5fa2',x:298,y:472,clue:'Find the bus that talks to other chips.'}
+};
+const IDS=Object.keys(ST);
+const PININFO={
+  TEMP:"TEMP is the chip's built-in thermometer.",
+  ANT:'ANT is the Wi-Fi antenna: the radio this game is using right now.',
+  IO28:'IO28 is wired to the BOOT button on the board.',
+  IO27:'IO27 drives the RGB light on many C5 boards.',
+  'IO1-6':'IO1 to IO6 are analog inputs: they measure voltage.',
+  I2C:'I2C (IO23 + IO24) is a two-wire bus for talking to other chips.',
+  GND:'GND is ground: 0 volts, where all the current flows back to.',
+  '3V3':'3V3 is the 3.3 volt power rail that feeds everything.'
+};
+const SLOTS=[[152,232,0,-1],[208,232,0,-1],[152,368,0,1],[208,368,0,1],[112,274,-1,0],[112,326,-1,0],[248,274,1,0],[248,326,1,0]]
+  .map(a=>({x:a[0],y:a[1],nx:a[2],ny:a[3],pin:''}));
+const TRACES=[];for(let i=0;i<26;i++){let x=20+Math.random()*320,y=80+Math.random()*490,p=[[x,y]];
+  for(let k=0;k<3;k++){if(k%2)y+=(Math.random()-.5)*150;else x+=(Math.random()-.5)*170;p.push([Math.max(8,Math.min(352,x)),Math.max(70,Math.min(585,y))]);}TRACES.push(p);}
+
+let wired,stars,base,carry,pl,bugs,parts,rope,started,won,t0,elapsed,hint,hintT,shake,cool,fails,open=null,now=0;
+function reset(){
+  wired={};stars={};base={};carry=null;fails={};parts=[];rope=[];started=false;won=false;elapsed=0;shake=0;cool=0;
+  pl={x:180,y:440,tx:180,ty:440,aim:null,dx:0,dy:1,step:0,stun:0};
+  const pins=Object.keys(PININFO).sort(()=>Math.random()-.5);SLOTS.forEach((s,i)=>s.pin=pins[i]);
+  bugs=[0,1].map(i=>({x:90+i*180,y:200+i*200,vx:(i?-1:1)*46,vy:(i?1:-1)*38}));
+  say('Tap a sensor to grab its wire, then plug it into the right pin on the chip!',9);
+}
+function say(t,s){hint=t;hintT=s||5;}
+
+// ---------- live data from the real ESP ----------
+let L={t:26,b:0,n:0,p:[[0,0],[0,0],[0,0],[0,0],[0,0],[0,0]],led:'000000',up:0,mem:0,pl:1};
+let live=false,demo=false,miss=0,hist=[],air=null,demoBtn=0;
+async function poll(){
+  try{const r=await fetch('/api/state',{cache:'no-store'});if(!r.ok)throw 0;L=await r.json();live=true;demo=false;miss=0;}
+  catch(e){miss++;if(!live&&miss>1)demo=true;}
+  if(demo){const t=Date.now()/1000;L.t=26+Math.round(Math.sin(t/7)*1.4);L.b=demoBtn;L.up=t|0;
+    L.p=L.p.map((a,i)=>i==3?[Math.max(0,Math.round(900+800*Math.sin(t))),40]:[Math.round(Math.random()*6),8]);}
+  hist.push(L.t);if(hist.length>90)hist.shift();
+  check();if(open)upd(open);
+  setTimeout(poll,document.hidden?1500:300);
+}
+function api(p){return demo?Promise.reject():fetch(p,{cache:'no-store'}).then(r=>r.json());}
+function check(){
+  if(wired.btn&&L.n<base.btn)base.btn=L.n;
+  if(wired.temp&&!stars.temp&&Math.abs(L.t-base.temp)>=1)star('temp');
+  if(wired.btn&&!stars.btn&&L.n-base.btn>=5)star('btn');
+  if(wired.probe&&!stars.probe&&L.p.some(a=>a[0]>300||a[1]>400))star('probe');
+}
+function star(id){if(stars[id])return;stars[id]=1;beep(880,.08);setTimeout(()=>beep(1320,.14),90);burst(ST[id].x,ST[id].y,'#ffe66d',26);
+  say('⭐ Bonus star: '+ST[id].name+'!',4);if(open==id)upd(id);}
+
+// ---------- sound ----------
+let ac=null;
+function beep(f,d,type){try{ac=ac||new (window.AudioContext||window.webkitAudioContext)();const o=ac.createOscillator(),v=ac.createGain();
+  o.type=type||'square';o.frequency.value=f;v.gain.value=.05;v.gain.exponentialRampToValueAtTime(.0001,ac.currentTime+d);
+  o.connect(v);v.connect(ac.destination);o.start();o.stop(ac.currentTime+d);}catch(e){}}
+
+// ---------- input ----------
+let sc=1,ox=0,oy=0;
+function fit(){const d=window.devicePixelRatio||1,w=innerWidth,h=innerHeight;cv.width=w*d;cv.height=h*d;
+  sc=Math.min(w/W,h/H);ox=(w-W*sc)/2;oy=(h-H*sc)/2;}
+addEventListener('resize',fit);fit();
+const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+cv.addEventListener('pointerdown',e=>{
+  e.preventDefault();
+  if(open){closeSheet();return;}
+  const p={x:(e.clientX-ox)/sc,y:(e.clientY-oy)/sc};
+  for(const id of IDS){const s=ST[id];
+    if(dist(p,s)<36){
+      if(wired[id]&&!carry){openSheet(id);return;}
+      const a=Math.atan2(300-s.y,180-s.x);go(s.x+Math.cos(a)*22,s.y+Math.sin(a)*22);return;}}
+  for(const s of SLOTS)if(dist(p,s)<26){go(s.x+s.nx*13,s.y+s.ny*13,s);if(!carry)say(PININFO[s.pin],5);return;}
+  go(p.x,p.y);
+});
+function go(x,y,aim){pl.aim=aim||null;pl.tx=Math.max(14,Math.min(W-14,x));pl.ty=Math.max(72,Math.min(H-72,y));if(!started){started=true;t0=now;}}
+const keys={};
+addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=1;if(e.key=='Escape')closeSheet();});
+addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=0;});
+
+// ---------- game logic ----------
+function burst(x,y,col,n){for(let i=0;i<n;i++){const a=Math.random()*6.283,v=40+Math.random()*130;
+  parts.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,l:.5+Math.random()*.6,col});}}
+function drop(msg){if(!carry)return;carry=null;rope=[];pl.stun=.5;shake=.3;beep(110,.25,'sawtooth');say(msg,5);}
+function step(dt){
+  if(started&&!won)elapsed=now-t0;
+  hintT-=dt;shake=Math.max(0,shake-dt);cool=Math.max(0,cool-dt);pl.stun=Math.max(0,pl.stun-dt);
+  let kx=(keys.arrowright||keys.d?1:0)-(keys.arrowleft||keys.a?1:0),ky=(keys.arrowdown||keys.s?1:0)-(keys.arrowup||keys.w?1:0);
+  if(kx||ky)go(pl.x+kx*30,pl.y+ky*30,'keys');
+  const dx=pl.tx-pl.x,dy=pl.ty-pl.y,d=Math.hypot(dx,dy);
+  if(d>1.5&&!pl.stun){const v=Math.min(d,150*dt);pl.x+=dx/d*v;pl.y+=dy/d*v;pl.dx=dx/d;pl.dy=dy/d;pl.step+=dt*11;}
+  if(!carry&&!pl.stun)for(const id of IDS)if(!wired[id]&&dist(pl,ST[id])<30){
+    carry=id;rope=[];for(let i=0;i<12;i++)rope.push({x:ST[id].x,y:ST[id].y});beep(520,.07);say(ST[id].name+' wire in hand. '+ST[id].clue,8);break;}
+  if(carry){
+    rope[0].x=ST[carry].x;rope[0].y=ST[carry].y;rope[11].x=pl.x;rope[11].y=pl.y;
+    for(let k=0;k<2;k++)for(let i=1;i<11;i++){rope[i].x+=((rope[i-1].x+rope[i+1].x)/2-rope[i].x)*.35;rope[i].y+=((rope[i-1].y+rope[i+1].y)/2+1.2-rope[i].y)*.35;}
+    if(!cool)for(const s of SLOTS)if(dist(pl,s)<19&&(pl.aim===s||pl.aim==='keys')){plug(s);break;}
+  }
+  if(!won)for(const b of bugs){b.x+=b.vx*dt;b.y+=b.vy*dt;
+    if(b.x<16||b.x>W-16)b.vx*=-1;if(b.y<72||b.y>H-72)b.vy*=-1;
+    b.x=Math.max(16,Math.min(W-16,b.x));b.y=Math.max(72,Math.min(H-72,b.y));
+    if(carry&&dist(b,pl)<17){burst(pl.x,pl.y,'#fff',14);drop('ZAP! A static spark knocked the wire loose. Grab it again!');}}
+  for(const p of parts){p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=160*dt;p.l-=dt;}
+  parts=parts.filter(p=>p.l>0);
+}
+function plug(s){
+  const st=ST[carry];
+  if(s.pin==st.pin){
+    const id=carry;carry=null;rope=[];wired[id]=s;if(id=='btn')base.btn=L.n;if(id=='temp')base.temp=L.t;
+    burst(s.x,s.y,st.col,30);beep(660,.08);setTimeout(()=>beep(990,.12),80);
+    if(IDS.every(i=>wired[i])){won=true;api('/api/led?c=party').catch(()=>{});for(let i=0;i<6;i++)setTimeout(()=>burst(60+Math.random()*240,150+Math.random()*300,['#ffd166','#ff5fa2','#59c3ff','#7ae582'][i%4],40),i*260);
+      setTimeout(()=>openSheet('win'),1500);}
+    else setTimeout(()=>openSheet(id),450);
+  }else{
+    fails[carry]=(fails[carry]||0)+1;cool=.9;shake=.25;beep(140,.2,'sawtooth');burst(s.x,s.y,'#ff4d4d',12);
+    pl.tx=pl.x=s.x+s.nx*34;pl.ty=pl.y=s.y+s.ny*34;
+    say('Bzzt! '+PININFO[s.pin]+' '+(fails[carry]>2?'The '+st.name+' wants the pin marked '+st.pin+'.':st.clue),8);
+  }
+}
+
+// ---------- drawing ----------
+function rr(x,y,w,h,r){g.beginPath();g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);g.arcTo(x+w,y+h,x,y+h,r);g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath();}
+function txt(s,x,y,size,col,align,weight){g.font=(weight||700)+' '+size+'px '+FONT;g.fillStyle=col;g.textAlign=align||'center';g.textBaseline='middle';g.fillText(s,x,y);}
+function readout(id){
+  if(id=='temp')return L.t+'°C';
+  if(id=='btn')return L.b?'PRESSED':'×'+Math.max(0,L.n-(base.btn||0));
+  if(id=='probe')return (Math.max.apply(0,L.p.map(a=>a[0]))/1000).toFixed(2)+' V';
+  if(id=='led')return L.led=='000000'?'off':'#'+L.led;
+  if(id=='ant')return air?air.length+' networks':L.pl+' online';
+  return i2cFound?(i2cFound.length?i2cFound.join(' '):'empty'):'scan me';
+}
+function wrap(s,x,y,maxw,size,col){g.font='700 '+size+'px '+FONT;const words=s.split(' ');let line='',lines=[];
+  for(const w of words){if(g.measureText(line+w).width>maxw&&line){lines.push(line);line='';}line+=w+' ';}lines.push(line);
+  lines.forEach((l,i)=>txt(l.trim(),x,y+(i-(lines.length-1))*(size+3),size,col));}
+function draw(){
+  const d=window.devicePixelRatio||1;
+  g.setTransform(1,0,0,1,0,0);g.fillStyle='#0b3d2e';g.fillRect(0,0,cv.width,cv.height);
+  const sx=shake?(Math.random()-.5)*8*shake/.3:0,sy=shake?(Math.random()-.5)*8*shake/.3:0;
+  g.setTransform(d*sc,0,0,d*sc,(ox+sx)*d,(oy+sy)*d);
+  // circuit board
+  g.fillStyle='#0e4a37';rr(4,58,W-8,H-92,14);g.fill();
+  g.strokeStyle='#14604a';g.lineWidth=3;g.lineCap='round';g.lineJoin='round';
+  for(const p of TRACES){g.beginPath();g.moveTo(p[0][0],p[0][1]);for(let i=1;i<p.length;i++)g.lineTo(p[i][0],p[i][1]);g.stroke();
+    g.fillStyle='#14604a';g.beginPath();g.arc(p[0][0],p[0][1],4,0,7);g.fill();g.fillStyle='#0b3d2e';g.beginPath();g.arc(p[0][0],p[0][1],1.6,0,7);g.fill();}
+  // finished wires
+  for(const id of IDS)if(wired[id]){const a=ST[id],b=wired[id],mx=(a.x+b.x)/2,my=(a.y+b.y)/2,cx=mx+(b.y-a.y)*.22,cy=my-(b.x-a.x)*.22;
+    g.strokeStyle='#0006';g.lineWidth=6;g.beginPath();g.moveTo(a.x,a.y+2);g.quadraticCurveTo(cx,cy+2,b.x,b.y+2);g.stroke();
+    g.strokeStyle=a.col;g.lineWidth=4;g.beginPath();g.moveTo(a.x,a.y);g.quadraticCurveTo(cx,cy,b.x,b.y);g.stroke();
+    for(let i=0;i<3;i++){const t=(now*.55+i/3)%1,u=1-t;g.fillStyle='#fff';g.beginPath();
+      g.arc(u*u*a.x+2*u*t*cx+t*t*b.x,u*u*a.y+2*u*t*cy+t*t*b.y,2.6,0,7);g.fill();}}
+  // the chip
+  const n=IDS.filter(i=>wired[i]).length;
+  for(const s of SLOTS){const tgt=carry&&cool<=0;g.fillStyle=tgt?'#ffe08a':'#f2c14e';
+    const pu=tgt?1.5*Math.sin(now*6):0;rr(s.x-9-pu/2,s.y-9-pu/2,18+pu,18+pu,4);g.fill();
+    g.fillStyle='#3a2a00';g.beginPath();g.arc(s.x,s.y,3.5,0,7);g.fill();}
+  g.fillStyle='#000a';rr(122,244,120,120,10);g.fill();
+  g.fillStyle='#1b1f24';rr(120,240,120,120,10);g.fill();g.strokeStyle='#39424d';g.lineWidth=2;g.stroke();
+  for(const s of SLOTS){const used=IDS.find(i=>wired[i]==s);const col=used?ST[used].col:'#cfd8e3';
+    if(s.nx)txt(s.pin,s.x-s.nx*13,s.y,9,col,s.nx<0?'left':'right',800);else txt(s.pin,s.x,s.y-s.ny*19,9,col,'center',800);}
+  // chip face wakes up as wires go in
+  const ey=296,openness=n/6;g.strokeStyle='#eafff4';g.fillStyle='#eafff4';g.lineWidth=2;
+  for(const ex of [170,190]){if(openness<.2){g.beginPath();g.moveTo(ex-4,ey);g.lineTo(ex+4,ey);g.stroke();}
+    else{g.beginPath();g.ellipse(ex,ey,3.5,1+4*openness,0,0,7);g.fill();}}
+  g.beginPath();if(won)g.arc(180,303,7,.15*Math.PI,.85*Math.PI);else{g.moveTo(175,308);g.lineTo(185,308);}g.stroke();
+  if(n==0)txt('z z',203,283+Math.sin(now*2)*2,8,'#9fd3bb');
+  txt('ESP32-C5',180,322,8,'#8794a3');
+  // sensor stations
+  for(const id of IDS){const s=ST[id],w=wired[id];
+    if(!w&&!carry){g.strokeStyle=s.col;g.globalAlpha=.5+.4*Math.sin(now*4);g.lineWidth=2;g.beginPath();g.arc(s.x,s.y,33+2*Math.sin(now*4),0,7);g.stroke();g.globalAlpha=1;}
+    g.fillStyle='#0008';rr(s.x-25,s.y-23,54,54,12);g.fill();
+    g.fillStyle=w?'#16302a':'#12261f';rr(s.x-27,s.y-27,54,54,12);g.fill();g.strokeStyle=s.col;g.lineWidth=w?3:2;g.stroke();
+    txt(s.icon,s.x,s.y+1,26,'#fff');
+    txt(s.name,s.x,s.y+38,10,'#eafff4');
+    if(w){g.fillStyle='#081a14';rr(s.x-34,s.y-49,68,17,8);g.fill();txt(readout(id),s.x,s.y-40,10,s.col,'center',800);
+      txt(stars[id]?'⭐':'☆',s.x+25,s.y-24,13,'#ffe66d');}
+    if(id=='btn'&&w&&L.b){g.strokeStyle='#ffd166';g.lineWidth=4;g.beginPath();g.arc(s.x,s.y,31,0,7);g.stroke();}
+    if(id=='led'&&w&&L.led!='000000'){g.fillStyle='#'+L.led;g.globalAlpha=.35;g.beginPath();g.arc(s.x,s.y,36,0,7);g.fill();g.globalAlpha=1;}}
+  // wire in hand
+  if(carry&&rope.length){g.strokeStyle='#0006';g.lineWidth=6;g.beginPath();g.moveTo(rope[0].x,rope[0].y+2);for(const p of rope)g.lineTo(p.x,p.y+2);g.stroke();
+    g.strokeStyle=ST[carry].col;g.lineWidth=4;g.beginPath();g.moveTo(rope[0].x,rope[0].y);for(const p of rope)g.lineTo(p.x,p.y);g.stroke();}
+  // static sparks
+  if(!won)for(const b of bugs){g.save();g.translate(b.x,b.y);g.rotate(now*5);g.strokeStyle='#bff';g.lineWidth=2;
+    for(let i=0;i<4;i++){g.rotate(Math.PI/2);g.beginPath();g.moveTo(3,0);g.lineTo(7+2*Math.sin(now*20+i),3);g.lineTo(11,-1);g.stroke();}
+    g.fillStyle='#fff';g.beginPath();g.arc(0,0,3.5,0,7);g.fill();g.restore();}
+  // Sparky
+  const moving=Math.hypot(pl.tx-pl.x,pl.ty-pl.y)>1.5,bob=moving?Math.sin(pl.step*2)*1.5:Math.sin(now*3)*.8;
+  g.fillStyle='#0006';g.beginPath();g.ellipse(pl.x,pl.y+13,10,3.5,0,0,7);g.fill();
+  g.fillStyle='#e09f1f';const f=moving?Math.sin(pl.step)*4:0;
+  g.beginPath();g.ellipse(pl.x-5,pl.y+11+f*.4,4,3,0,0,7);g.ellipse(pl.x+5,pl.y+11-f*.4,4,3,0,0,7);g.fill();
+  g.fillStyle=pl.stun?'#fff':'#ffd23f';g.beginPath();g.arc(pl.x,pl.y+bob,12,0,7);g.fill();g.strokeStyle='#a86b00';g.lineWidth=1.5;g.stroke();
+  g.fillStyle='#ffd23f';g.beginPath();g.moveTo(pl.x-2,pl.y+bob-11);g.lineTo(pl.x+4,pl.y+bob-21);g.lineTo(pl.x+1,pl.y+bob-15);g.lineTo(pl.x+6,pl.y+bob-16);g.lineTo(pl.x+1,pl.y+bob-9);g.fill();
+  const lx=pl.dx*3,ly=pl.dy*2.2;
+  for(const e of [-4.5,4.5]){g.fillStyle='#fff';g.beginPath();g.arc(pl.x+e+lx*.5,pl.y+bob-2+ly*.5,3.6,0,7);g.fill();
+    g.fillStyle='#222';g.beginPath();g.arc(pl.x+e+lx,pl.y+bob-2+ly,1.7,0,7);g.fill();}
+  if(carry){g.fillStyle=ST[carry].col;rr(pl.x+8,pl.y+bob+1,9,7,2);g.fill();g.fillStyle='#ddd';g.fillRect(pl.x+17,pl.y+bob+2,3,1.5);g.fillRect(pl.x+17,pl.y+bob+5,3,1.5);}
+  for(const p of parts){g.globalAlpha=Math.min(1,p.l*2);g.fillStyle=p.col;g.fillRect(p.x-2,p.y-2,4,4);}g.globalAlpha=1;
+  // top bar
+  g.setTransform(d*sc,0,0,d*sc,ox*d,oy*d);
+  txt('⚡ ESP GAME THING',12,22,15,'#f2c14e','left',800);
+  g.fillStyle=live&&miss<4?'#7ae582':'#ffb347';g.beginPath();g.arc(16,43,4,0,7);g.fill();
+  txt(live?(miss<4?'live from the real chip':'looking for the chip...'):(demo?'demo mode (no chip found)':'connecting...'),26,43,10,'#9fd3bb','left',600);
+  const m=Math.floor(elapsed/60),s=Math.floor(elapsed%60);
+  txt('🔌 '+n+'/6   ⭐ '+IDS.filter(i=>stars[i]).length+'/6',W-12,22,13,'#eafff4','right',800);
+  txt('⏱ '+m+':'+(s<10?'0':'')+s,W-12,43,11,'#9fd3bb','right',700);
+  if(hintT>0||carry){g.fillStyle='#081a14e6';rr(8,H-32-22,W-16,48,12);g.fill();wrap(hint,W/2,H-22,W-40,11,'#eafff4');}
+  else if(won)txt('Tap any sensor to play with the real hardware',W/2,H-22,11,'#9fd3bb');
+}
+
+// ---------- info sheets ----------
+let i2cFound=null,ledPicked=false;
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function bonus(id,text){return '<div class="bonus'+(stars[id]?' done':'')+'" id="bo"><b>'+(stars[id]?'⭐ Bonus done!':'☆ Bonus challenge')+'</b><br>'+text+'</div>';}
+const BODY={
+  temp:()=>'<div class="viz"><div class="big"><span id="tv"></span>°C</div><canvas id="tg" width="600" height="110" style="width:100%;height:55px"></canvas></div>'+
+    '<p>Every ESP32 has a tiny thermometer built right into its silicon. That number is the real temperature inside the chip you are connected to, this second.</p><p>Chips warm up when they work hard, and running Wi-Fi is hard work!</p>'+
+    bonus('temp','Make the reading change by 1°C. Pinch the chip between warm fingers, or blow cool air across it. It started at <b>'+base.temp+'°C</b>.'),
+  btn:()=>'<div class="viz"><div class="btnviz" id="bb">BOOT</div><div style="text-align:center">pin reads <code id="bv">1</code> &nbsp; presses <b id="bn">0</b>/5</div></div>'+
+    '<p>A button is the simplest sensor there is: connected or not, 1 or 0.</p><p>IO28 is gently held at 3.3 volts (a <code>1</code>) by a pull-up resistor. Press BOOT and the pin is shorted to ground, so the chip reads <code>0</code>.</p>'+
+    bonus('btn','Press the real <b>BOOT</b> button on the board 5 times. (Not RST, that one restarts the chip!)'),
+  probe:()=>'<div class="viz"><div class="bars" id="pb">'+[1,2,3,4,5,6].map(i=>'<div><i><b></b></i>IO'+i+'<br><span>0.00</span></div>').join('')+'</div></div>'+
+    '<p>These pins are analog inputs. Instead of just 1 or 0 they measure <i>how much</i> voltage, anywhere from 0 to 3.3 V. Right now a tiny resistor inside the chip pulls each one down to 0 V.</p>'+
+    bonus('probe','Bridge the <b>3V3</b> pin to any pin from IO1 to IO6 with a jumper wire, or pinch both pins with a damp fingertip. Your skin is a resistor, so you will land somewhere in between!<br>⚠️ Use the 3V3 pin only, never 5V.'),
+  led:()=>'<div class="viz"><div class="lamp" id="lamp"></div><div class="sw">'+['ff0000','ff8800','ffee00','00ff44','00ccff','3344ff','cc33ff','ffffff','000000'].map(c=>'<button data-c="'+c+'" style="background:#'+c+'"></button>').join('')+'</div></div>'+
+    '<p>Sensors are inputs. A light is an <i>output</i>: the chip talking back to the world.</p><p>An RGB LED is three tiny lights (red, green and blue) mixed together. IO27 sends the colour as a rapid stream of pulses.</p>'+
+    bonus('led','Pick a colour. If your board has an RGB light on IO27, it changes for real.'),
+  ant:()=>'<p>The antenna turns electricity into radio waves. This game is flying through it to your screen right now. <b id="pc"></b></p><p>When the chip woke up it listened for other Wi-Fi nearby. Signal is measured in dBm: <b>closer to 0 is stronger</b> (−40 is loud, −85 is a whisper).</p>'+
+    bonus('ant','Tap the <b>strongest</b> network in the list.')+'<div class="viz" id="nets">listening...</div>',
+  i2c:()=>'<p>I²C is a two-wire bus: one wire is a clock (SCL, IO24) and one carries data (SDA, IO23). Lots of chips can share the same two wires because each has its own address, like houses on a street.</p><p>A scan knocks on every door and sees who answers. This board uses the bus to drive robot legs!</p>'+
+    '<div class="viz"><button class="go" id="scan">Knock on every door</button><div id="i2r" style="margin-top:8px"></div></div>'+bonus('i2c','Run a scan and see who is home.'),
+  win:()=>{const m=Math.floor(elapsed/60),s=Math.floor(elapsed%60),k=IDS.filter(i=>stars[i]).length;return '<div class="big">🎉</div><p style="text-align:center">Every sensor is wired and the chip is wide awake.<br><b>Time '+m+':'+(s<10?'0':'')+s+' · Stars '+k+'/6</b></p>'+
+    '<p>Now the fun part: tap any sensor on the board to play with the <i>real</i> hardware and earn its bonus star.</p><button class="go" id="again">Shuffle the pins and play again</button>';}
+};
+const KNOWN={'0x40':'PCA9685 servo driver: it moves the robot legs!','0x70':'PCA9685 "all call" address','0x3c':'OLED display','0x68':'motion sensor or clock','0x76':'weather sensor','0x77':'weather sensor','0x48':'temperature sensor'};
+function openSheet(id){
+  open=id;const t=id=='win'?'Chip online!':ST[id].icon+' '+ST[id].name+' → '+ST[id].pin;
+  sh.innerHTML='<button class="x" id="cx">✕</button><h2>'+t+'</h2>'+BODY[id]();sheet.classList.add('on');sheet.scrollTop=0;
+  $('cx').onclick=closeSheet;
+  if(id=='win')$('again').onclick=()=>{closeSheet();reset();};
+  if(id=='btn'){const b=$('bb');b.onpointerdown=()=>{if(demo){demoBtn=1;L.n++;}};b.onpointerup=()=>{demoBtn=0;};}
+  if(id=='led')sh.querySelectorAll('.sw button').forEach(b=>b.onclick=()=>{const c=b.dataset.c;L.led=c;api('/api/led?c='+c).catch(()=>{});if(c!='000000')star('led');upd('led');});
+  if(id=='ant'){if(air)nets();else api('/api/air').then(a=>{air=a;}).catch(()=>{air=[['HomeWifi',6,-41],['HomeWifi',149,-52],['Neighbour',11,-74],['PrinterSetup',1,-80]];}).then(()=>{if(open=='ant')nets();});}
+  if(id=='i2c'){$('scan').onclick=()=>{$('i2r').textContent='knock knock...';api('/api/i2c').catch(()=>['0x40','0x70']).then(a=>{i2cFound=a;star('i2c');showI2c();});};if(i2cFound)showI2c();}
+  upd(id);
+}
+function closeSheet(){open=null;sheet.classList.remove('on');}
+function showI2c(){const el=$('i2r');if(!el)return;
+  el.innerHTML=i2cFound.length?'<ul>'+i2cFound.map(a=>'<li><code>'+esc(a)+'</code> '+(KNOWN[a]||'a mystery chip')+'</li>').join('')+'</ul>'
+    :'Nobody home. Nothing is plugged into the bus right now. Connect a module to SDA (IO23) and SCL (IO24), then knock again.';}
+function nets(){const el=$('nets');if(!el)return;el.textContent='';
+  if(!air.length){el.textContent='The chip did not hear any other networks.';return;}
+  const top=Math.max.apply(0,air.map(a=>a[2]));
+  air.slice().sort((a,b)=>a[0]<b[0]?-1:1).forEach(a=>{const row=document.createElement('div');row.className='net';
+    const bars=Math.max(1,Math.min(4,Math.round((a[2]+95)/13)));
+    row.innerHTML='<div class="sig">'+[5,8,12,16].map((h,i)=>'<i style="height:'+h+'px"'+(i<bars?' class="on"':'')+'></i>').join('')+'</div><span></span><small></small>';
+    row.children[1].textContent=a[0]||'(hidden network)';row.children[2].textContent=(a[1]>14?'5 GHz':'2.4 GHz')+' · '+a[2]+' dBm';
+    row.onclick=()=>{if(a[2]==top){row.classList.add('yes');star('ant');}else{row.classList.add('no');beep(140,.15,'sawtooth');}};
+    el.appendChild(row);});}
+function upd(id){
+  const bo=$('bo');if(bo&&stars[id]&&!bo.classList.contains('done')){bo.classList.add('done');bo.querySelector('b').textContent='⭐ Bonus done!';}
+  if(id=='temp'&&$('tv')){$('tv').textContent=L.t;const c=$('tg'),x=c.getContext('2d');x.clearRect(0,0,600,110);
+    const lo=Math.min.apply(0,hist)-1,hi=Math.max.apply(0,hist)+1;x.strokeStyle='#ff7a59';x.lineWidth=5;x.lineJoin='round';x.beginPath();
+    hist.forEach((v,i)=>{const px=600-(hist.length-1-i)*6.6,py=100-(v-lo)/(hi-lo)*90;i?x.lineTo(px,py):x.moveTo(px,py);});x.stroke();}
+  if(id=='btn'&&$('bb')){$('bb').classList.toggle('on',!!L.b);$('bv').textContent=L.b?0:1;$('bn').textContent=Math.min(5,Math.max(0,L.n-base.btn));}
+  if(id=='probe'&&$('pb'))[].forEach.call($('pb').children,(el,i)=>{const mv=L.p[i]?L.p[i][0]:0;el.querySelector('b').style.height=Math.min(100,mv/33)+'%';el.querySelector('span').textContent=(mv/1000).toFixed(2);});
+  if(id=='led'&&$('lamp')){const on=L.led!='000000';$('lamp').style.background=on?'#'+L.led:'#222';$('lamp').style.boxShadow=on?'0 0 34px #'+L.led:'none';}
+  if(id=='ant'&&$('pc'))$('pc').textContent=L.pl+(L.pl==1?' device is':' devices are')+' connected to the chip.';
+}
+
+// ---------- main loop ----------
+let last=0;
+function frame(t){now=t/1000;const dt=Math.min(.05,now-last);last=now;if(!open)step(dt);else if(started&&!won)t0+=dt;draw();requestAnimationFrame(frame);}
+reset();poll();requestAnimationFrame(frame);
+if(location.hash=='#debug')window.espGame={open:openSheet,wire:id=>{wired[id]=SLOTS.find(s=>s.pin==ST[id].pin);base[id]=id=='btn'?L.n:L.t;},win:()=>{IDS.forEach(i=>window.espGame.wire(i));won=true;openSheet('win');}};
+})();
+</script>
+</body>
+</html>

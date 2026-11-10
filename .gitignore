@@ -1,0 +1,3 @@
+# full flash dump of the board: large, and may hold saved Wi-Fi credentials
+*.bin
+.DS_Store
